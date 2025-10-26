@@ -23,6 +23,9 @@ async def find_random_route_with_results(
     The function keeps trying random airport pairs until it finds route data that
     contains bookable tickets. Only airports with ``size >= min_airport_size``
     are considered.
+
+    The airport dictionaries returned will include additional details fetched from
+    the /airports/{id} endpoint.
     """
 
     airports = await client.list_airports(min_size=min_airport_size)
@@ -45,15 +48,23 @@ async def find_random_route_with_results(
         )
 
         try:
+            # Fetch route information
             route = await client.get_route(origin_id, destination_id)
+            if _has_itineraries(route):
+                # Fetch detailed airport information
+                origin_details = await client.get_airport(origin_id)
+                destination_details = await client.get_airport(destination_id)
+                # Update the airport dictionaries with the additional details
+                origin.update(origin_details)
+                destination.update(destination_details)
+                return origin, destination, route
         except Exception:  # pragma: no cover - network exceptions
-            _LOGGER.exception("Unable to fetch route %s -> %s", origin_id, destination_id)
+            _LOGGER.exception("Unable to fetch route or airport details %s -> %s", origin_id, destination_id)
             if retry_delay_seconds:
                 await asyncio.sleep(retry_delay_seconds)
             continue
 
-        if _has_itineraries(route):
-            return origin, destination, route
+        # Removed duplicate return here since we now handle it in the try block above
 
         if retry_delay_seconds:
             await asyncio.sleep(retry_delay_seconds)
@@ -64,11 +75,17 @@ async def find_random_route_with_results(
     )
 
 
-def _has_itineraries(route: Dict[str, Any]) -> bool:
-    for key in ("tickets", "itineraries", "results", "routes", "options"):
-        value = route.get(key)
-        if isinstance(value, Sequence) and value:
-            return True
+def _has_itineraries(route: Any) -> bool:
+    # Handle case where route is a list (direct itineraries)
+    if isinstance(route, Sequence) and not isinstance(route, str):
+        return len(route) > 0
+    
+    # Handle case where route is a dictionary
+    if isinstance(route, dict):
+        for key in ("tickets", "itineraries", "results", "routes", "options"):
+            value = route.get(key)
+            if isinstance(value, Sequence) and value:
+                return True
     return False
 
 

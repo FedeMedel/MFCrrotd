@@ -100,6 +100,18 @@ class MyFlyClient:
     async def get_route(self, origin_id: int, destination_id: int) -> Dict[str, Any]:
         """Return details for a prospective route between two airports."""
         route = await self._request_json(f"/search-route/{origin_id}/{destination_id}")
+        
+        # Also fetch research link data
+        try:
+            research = await self._request_json(f"/research-link/{origin_id}/{destination_id}")
+            if isinstance(research, dict):
+                # Merge research data into route data
+                if not isinstance(route, dict):
+                    route = {"tickets": route} if isinstance(route, list) else {}
+                route.update(research)
+        except Exception as e:
+            _LOGGER.warning(f"Failed to fetch research data for {origin_id}->{destination_id}: {e}")
+        
         return route
 
 

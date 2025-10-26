@@ -6,10 +6,10 @@ import asyncio
 import logging
 import os
 from typing import Optional
-import contextlib
 
 import discord
 from discord.ext import tasks
+from dotenv import load_dotenv
 
 from .api import MyFlyClient
 from .formatter import format_route_message
@@ -21,16 +21,16 @@ _LOGGER = logging.getLogger(__name__)
 class RouteOfTheDayBot(discord.Client):
     """Discord client that posts a random route once every 24 hours."""
 
-    def __init__(self, *, channel_id: int, **kwargs) -> None:
+    def __init__(self, *, channel_id: int, min_airport_size: int = 3, **kwargs) -> None:
         intents = kwargs.pop("intents", discord.Intents.default())
         super().__init__(intents=intents, **kwargs)
         self.channel_id = channel_id
+        self.min_airport_size = min_airport_size
         self._channel: Optional[discord.abc.Messageable] = None
         self.api_client = MyFlyClient()
-        self._initial_post_task: Optional[asyncio.Task[None]] = None
 
     async def setup_hook(self) -> None:  # type: ignore[override]
-        self._initial_post_task = self.loop.create_task(self._initial_post())
+        # Only start the scheduled task, don't post immediately on startup
         self.route_task.start()
 
     async def on_ready(self) -> None:  # pragma: no cover - event handler
@@ -44,12 +44,6 @@ class RouteOfTheDayBot(discord.Client):
             self._channel = channel  # type: ignore[assignment]
         return self._channel
 
-    async def _initial_post(self) -> None:
-        try:
-            await self.wait_until_ready()
-            await self.send_daily_route()
-        finally:
-            self._initial_post_task = None
 
     @tasks.loop(hours=24)
     async def route_task(self) -> None:  # pragma: no cover - requires discord runtime
@@ -64,7 +58,10 @@ class RouteOfTheDayBot(discord.Client):
             return
 
         try:
-            origin, destination, route = await find_random_route_with_results(self.api_client)
+            origin, destination, route = await find_random_route_with_results(
+                self.api_client, 
+                min_airport_size=self.min_airport_size
+            )
             message = format_route_message(origin, destination, route)
         except Exception:  # pragma: no cover - network errors
             _LOGGER.exception("Failed to generate daily route message")
@@ -77,19 +74,42 @@ class RouteOfTheDayBot(discord.Client):
         await self.wait_until_ready()
 
     async def close(self) -> None:  # type: ignore[override]
-        if self._initial_post_task is not None:
-            self._initial_post_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._initial_post_task
-            self._initial_post_task = None
         await self.api_client.close()
         await super().close()
 
 
-async def run_once(channel_id: int) -> str:
+async def run_once(channel_id: int, token: str, min_airport_size: int = 3) -> str:
+    """Generate a route message and send it to Discord, then return the message."""
     async with MyFlyClient() as client:
-        origin, destination, route = await find_random_route_with_results(client)
-        return format_route_message(origin, destination, route)
+        origin, destination, route = await find_random_route_with_results(client, min_airport_size=min_airport_size)
+        message = format_route_message(origin, destination, route)
+        
+        # Send to Discord using a simple client
+        intents = discord.Intents.default()
+        intents.message_content = False
+        
+        client_discord = discord.Client(intents=intents)
+        
+        @client_discord.event
+        async def on_ready():
+            try:
+                channel = client_discord.get_channel(channel_id)
+                if channel is None:
+                    channel = await client_discord.fetch_channel(channel_id)
+                await channel.send(message)
+                print(f"Message sent to Discord channel {channel_id}")
+            except Exception as e:
+                print(f"Error sending message to Discord: {e}")
+            finally:
+                await client_discord.close()
+        
+        try:
+            await client_discord.start(token)
+        except Exception as e:
+            print(f"Error connecting to Discord: {e}")
+            await client_discord.close()
+        
+        return message
 
 
 def _parse_args() -> argparse.Namespace:
@@ -97,7 +117,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--once",
         action="store_true",
-        help="Fetch a route once and print the message to stdout instead of starting the Discord bot.",
+        help="Fetch a route once, send it to Discord, and print the message to stdout for testing.",
     )
     parser.add_argument(
         "--channel",
@@ -112,6 +132,12 @@ def _parse_args() -> argparse.Namespace:
         help="Discord bot token (defaults to DISCORD_TOKEN env variable).",
     )
     parser.add_argument(
+        "--min-airport-size",
+        type=int,
+        default=int(os.getenv("MIN_AIRPORT_SIZE", "3")),
+        help="Minimum airport size to consider (defaults to MIN_AIRPORT_SIZE env variable).",
+    )
+    parser.add_argument(
         "--log-level",
         default=os.getenv("LOG_LEVEL", "INFO"),
         help="Python logging level to use.",
@@ -120,11 +146,23 @@ def _parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    # Load environment variables from .env file (if it exists)
+    try:
+        load_dotenv()
+    except Exception as e:
+        # If .env file doesn't exist or has issues, continue without it
+        pass
+    
     args = _parse_args()
     logging.basicConfig(level=args.log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
     if args.once:
-        message = asyncio.run(run_once(args.channel))
+        if not args.token:
+            raise SystemExit("A Discord token must be provided via --token or DISCORD_TOKEN env var for --once testing.")
+        if not args.channel:
+            raise SystemExit("A Discord channel ID must be provided via --channel or DISCORD_CHANNEL_ID env var for --once testing.")
+        
+        message = asyncio.run(run_once(args.channel, args.token, args.min_airport_size))
         print(message)
         return
 
@@ -136,7 +174,11 @@ def main() -> None:
     intents = discord.Intents.default()
     intents.message_content = False
 
-    bot = RouteOfTheDayBot(channel_id=args.channel, intents=intents)
+    bot = RouteOfTheDayBot(
+        channel_id=args.channel, 
+        min_airport_size=args.min_airport_size,
+        intents=intents
+    )
     bot.run(args.token)
 
 
