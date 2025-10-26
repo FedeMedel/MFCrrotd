@@ -3,20 +3,17 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import contextlib
 import logging
 import os
 from typing import Optional
+import contextlib
 
 import discord
 from discord.ext import tasks
-from dotenv import load_dotenv
 
 from .api import MyFlyClient
 from .formatter import format_route_message
 from .generator import find_random_route_with_results
-
-load_dotenv()
 
 _LOGGER = logging.getLogger(__name__)
 

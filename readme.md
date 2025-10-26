@@ -21,20 +21,13 @@ pip install -r requirements.txt
 
 ## Configuration
 
-The bot reads its settings from environment variables (optionally via a `.env` file loaded at startup):
+The bot uses environment variables for configuration:
 
 - `DISCORD_TOKEN`: Discord bot token.
 - `DISCORD_CHANNEL_ID`: Numeric ID of the channel where updates should be posted.
 - `LOG_LEVEL` (optional): Python logging level (defaults to `INFO`).
 
-To get started quickly:
-
-```bash
-cp .env.example .env
-# edit .env with your token and channel ID
-```
-
-The `python-dotenv` dependency is bundled so that running the bot from the project root automatically loads values from `.env`. You can also provide the token and channel ID via command-line arguments.
+You can also provide the token and channel ID via command-line arguments.
 
 ## Running locally
 
